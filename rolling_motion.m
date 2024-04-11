@@ -9,7 +9,7 @@
 %   component.
 function dx = rolling_motion(t,x,param,slipping,k_t,tau_e,F_e)
 % © Nils C. A. Wilhelmsen
-% 22/03/2024
+% 11/04/2024
 %% Extract model parameters
 m = param.m;                                                                % Combined sub and drillstring segment mass [kg]
 V = param.V;                                                                % Net sub and drillstring segment volume [m^3]

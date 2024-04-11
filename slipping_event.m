@@ -4,7 +4,7 @@
 %   specifying the ODE integration options.
 function [value, isterminal, direction] = slipping_event(t, x, param, k_t, F_e)
 % © Nils C.A. Wilhelmsen
-% 22/03/2024
+% 11/04/2024
 %% Extract parameters
 m = param.m;
 I_S = param.I_S;

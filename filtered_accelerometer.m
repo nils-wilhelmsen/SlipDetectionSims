@@ -3,7 +3,7 @@
 %   coordinate frame.
 function [d2r_E0_E0,d2r_E1_E0] = filtered_accelerometer(param, x_arr,t_arr,flag_arr, F_e, k_t)
 % © Nils C. A. Wilhelmsen
-% 22/03/2024
+% 11/04/2024
 %% Extract parameters
 r_So = param.r_So;
 r_w = param.r_w;

@@ -4,7 +4,7 @@
 %   specifying the ODE integration options.
 function [value, isterminal, direction] = rolling_event(t,x,param)
 % © Nils C.A. Wilhelmsen
-% 22/03/2024
+% 11/04/2024
 %% Extract parameters
 r_So = param.r_So;
 r_w = param.r_w;

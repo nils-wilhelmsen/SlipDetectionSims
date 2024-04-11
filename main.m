@@ -1,6 +1,6 @@
 %% Main code file for "Modeling and Detection of Slipping in Damping Subs for Drilling"
 % © Nils C. A. Wilhelmsen
-% 22/03/2024
+% 11/04/2024
 clear all; close all;
 %% Model parameters
 % Damping sub
@@ -23,6 +23,10 @@ xi = 1;                                                                     % Pa
 mu = 0.6;                                                                   % Bit friction coefficient [-]
 l = 1e-3;                                                                   % Length of wearflats [m]
 sigma_bar = 6e7;                                                            % Bit contact stress [Pa]
+t_drill = 10;                                                               % Time at which drillbit comes in contact with rocks [s]
+k_P = 2000;                                                                 % Top drive controller P gain [N*m*s/rad]
+k_I = 1000;                                                                 % Top drive controller I gain [N*m/rad]
+d_phi_td_setpoint = 15;                                                     % Top drive velocity setpoint [rad/s]
 
 % Well
 r_w = 0.1;                                                                  % Inner radius of well [m]
@@ -34,7 +38,7 @@ g = 9.8;                                                                    % Ac
 rho = 1200;                                                                 % Density of drilling mud [kg/m^3]
 m = m_S + m_ds;                                                             % Combined sub and drillstring segment mass [kg]
 V = pi*((l_ds - l_S)*r_ds^2 + l_S*r_So^2);                                  % Net sub and drillstring segment volume [m^3]
-k_t = 300;                                                                  % Magnetic damping coefficient [...]
+k_t = 200;                                                                  % Magnetic damping coefficient [N*s/rad]
 alpha = -r_So/(r_w - r_So);                                                 % Proportionality constant during rolling [-]
 %% Initialize simulation
 % Define parameters for integration function
@@ -60,6 +64,10 @@ param.xi = xi;
 param.mu = mu;
 param.l = l;
 param.sigma_bar = sigma_bar;
+param.t_drill = t_drill;
+param.k_P = k_P;
+param.k_I = k_I;
+param.d_phi_td_setpoint = 15;
 
 % Define initial conditions
 theta0 = 0;                                                                 % Initial sub location in wellbore
@@ -70,17 +78,17 @@ phi_ds0 = 0;                                                                % In
 d_phi_ds0 = 0;                                                              % Initial drillstring rotational velocity
 phi_td0 = 0;                                                                % Initial topdrive rotational angle
 d_phi_td0 = 0;                                                              % Intiial topdrive rotational velocity
+integrator0 = 0;                                                            % Initial value of integrator term in PI controller
 
 x0 = [theta0;d_theta0;phi_S0;d_phi_S0;phi_ds0;d_phi_ds0;%]; 
-        phi_td0; d_phi_td0];                                                % Vector containing initial conditions
-
-% Define external torque and force signals
-tau_d = @(t) 3e3 + 0*t;                                                     % Top-drive torque
-F_e = @(t) 0*t;                                                             % External force
+        phi_td0; d_phi_td0;integrator0;];                                   % Vector containing initial conditions
 
 % Simulation initial and final times
 t0 = 0;                                                                     % Simulation intitial time
-tf = 10;                                                                    % Simulation final time
+tf = 20;                                                                    % Simulation final time     
+
+% Define force signal
+F_e = @(t) 0*t;                                                             % External force
 
 % Initialize integration stop time to initial time
 tend = t0;
@@ -112,10 +120,13 @@ while(tend < tf)
     end
     
     % Run simulation
-    [t,x,te,xe,ie] = ode23(@(t,x) drillstring_sub_coupled_model(t,x,param,slipping, k_t, tau_d(t), F_e(t)), [tend tf], x0, options);
+    [t,x,te,xe,ie] = ode23(@(t,x) drillstring_sub_coupled_model(t,x,param,slipping, k_t, F_e(t)), [tend tf], x0, options);
 
     % Calculate recent vector of flags
     flags = slipping*ones(size(t));
+    
+    % Truncate true flags to interior points
+    flags(1)=false;flags(end)=false;
 
     % Flip slipping flag
     if(slipping)
@@ -141,12 +152,10 @@ while(tend < tf)
         slipping = true;
     end
 
-    % Update tend and last element of flags vector after flag flipping
+    % Update tend
     if(~isempty(te))
         % Set next simulation start time to last time instant
         tend = t(end);
-        % Modify last element of flags vector to represent true state
-        flags(end) = slipping;
     else
         tend = tf;
     end
@@ -174,12 +183,21 @@ d_phi_td = x_arr(:,8);
 
 % Add noise to accelerometer signals
 [col, row] = size(d2r_E0_E0);
-d2r_E0_E0 = d2r_E0_E0 + wgn(col, row,1,1e-3);
-d2r_E1_E0 = d2r_E1_E0 + wgn(col, row,1,1e-3);
+d2r_E0_E0_noise = d2r_E0_E0 + wgn(col, row,1, 1e-3);
+d2r_E1_E0_noise = d2r_E1_E0 + wgn(col, row,1, 1e-3);
+
+
+% Filter accelerometer signals
+filt_order = 10;
+d2r_E0_E0_filtered = [filter(ones(filt_order, 1)/filt_order, 1, d2r_E0_E0_noise(1,:));
+                       filter(ones(filt_order, 1)/filt_order, 1, d2r_E0_E0_noise(2,:))];
+
+d2r_E1_E0_filtered = [filter(ones(filt_order, 1)/filt_order, 1, d2r_E1_E0_noise(1,:));
+                       filter(ones(filt_order, 1)/filt_order, 1, d2r_E1_E0_noise(2,:))];
 
 % Calculate sums and differences of accelerometer signals
-m0 = 0.5*(d2r_E0_E0 + d2r_E1_E0);
-m1 = 0.5*(d2r_E0_E0 - d2r_E1_E0);
+m0 = 0.5*(d2r_E0_E0_filtered + d2r_E1_E0_filtered);
+m1 = 0.5*(d2r_E0_E0_filtered - d2r_E1_E0_filtered);
 
 % Norm containing only theta-based signals
 m0_norm = sqrt(sum(m0.^2));
@@ -198,46 +216,79 @@ residual = sqrt(sigma) - m0_norm;
 i=1;
 
 % Last time of plot
-t_plot =7;
+t_plot = tf;
 
-% Plot drillstring angle with/without damping
-figure(i);i=i+1;
-hold on
-plot(t_arr, phi_ds, 'linewidth', 2);
+% Plot topdrive velocity
+figure(i); i=i+1;
+subplot(2,1,1);
+hold on;
+plot(t_arr, d_phi_td, 'linewidth', 2);
 box on; grid on;
-ylim([-4 5]);
+ylim([0 35]);
 xlim([0 t_plot]);
-ylabel('Drillstring rotational angle $[rad]$', 'interpreter', 'latex', 'fontsize', 16);
+ylabel('Angular velocity $[\frac{rad}{s}]$', 'interpreter', 'latex', 'fontsize', 16);
 xlabel('Time $[s]$', 'interpreter', 'latex', 'fontsize', 16);
-legend('$\phi_{ds}(t)$ with damping','interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
+legend('$\dot\phi_{td}(t)$','interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
+%
+% Plot drillstring velocity
+subplot(2,1,2);
+hold on;
+plot(t_arr, d_phi_ds, 'linewidth', 2);
+box on; grid on;
+ylim([0 35]);
+xlim([0 t_plot]);
+ylabel('Angular velocity $[\frac{rad}{s}]$', 'interpreter', 'latex', 'fontsize', 16);
+xlabel('Time $[s]$', 'interpreter', 'latex', 'fontsize', 16);
+legend('$\dot\phi_{ds}(t)$', '$\dot\phi_{ds}(t)$ with damping','interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
 
-% Plot theta and phi_S
+% Plot theta and theta_dot
 figure(i);i=i+1;
 %
 subplot(2,1,1);
 plot(t_arr, theta, 'linewidth', 2);
 box on; grid on;
-ylim([-pi/2 pi/2]);
+ylim([-pi pi]);
 xlim([0 t_plot]);
-ylabel('Sub location $[rad]$', 'interpreter', 'latex', 'fontsize', 16);
+ylabel('Angle $[rad]$', 'interpreter', 'latex', 'fontsize', 16);
 xlabel('Time $[s]$', 'interpreter', 'latex', 'fontsize', 16);
 legend('$\theta(t)$', 'interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
 %
 subplot(2,1,2);
-plot(t_arr, phi_S, 'linewidth', 2);
+plot(t_arr, d_theta, 'linewidth', 2);
 box on; grid on;
-ylim([-pi/2 pi/2]);
+ylim([-3*pi 3*pi]);
 xlim([0 t_plot]);
-ylabel('Sub orientation $[rad]$', 'interpreter', 'latex', 'fontsize', 16);
+ylabel('Angular velocity $[\frac{rad}{s}]$', 'interpreter', 'latex', 'fontsize', 16);
+xlabel('Time $[s]$', 'interpreter', 'latex', 'fontsize', 16);
+legend('$\dot\theta(t)$', 'interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
+
+% Plot phi_S and phi_S_dot
+figure(i);i=i+1;
+%
+subplot(2,1,1);
+plot(t_arr, mod(phi_S+pi, 2*pi)-pi, 'linewidth', 2);
+box on; grid on;
+ylim([-pi pi]);
+xlim([0 t_plot]);
+ylabel('Angle $[rad]$', 'interpreter', 'latex', 'fontsize', 16);
 xlabel('Time $[s]$', 'interpreter', 'latex', 'fontsize', 16);
 legend('$\phi_S(t)$', 'interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
-
+%
+subplot(2,1,2);
+plot(t_arr, d_phi_S, 'linewidth', 2);
+box on; grid on;
+ylim([-pi pi]);
+xlim([0 t_plot]);
+ylabel('Angular velocity $[\frac{rad}{s}]$', 'interpreter', 'latex', 'fontsize', 16);
+xlabel('Time $[s]$', 'interpreter', 'latex', 'fontsize', 16);
+legend('$\dot\phi_S(t)$', 'interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
 
 % Plot relative slippage
 figure(i);i=i+1;
-plot(t_arr, alpha*d_phi_S - d_theta, 'linewidth', 2);
+plot(t_arr, -alpha*d_phi_S + d_theta, 'linewidth', 2);
 box on; grid on;
 xlim([0 t_plot]);
+ylim([-1 6]);
 ylabel('Relative slippage $[\frac{rad}{s}]$', 'interpreter', 'latex', 'fontsize', 16);
 xlabel('Time $[s]$', 'interpreter', 'latex', 'fontsize', 16);
 legend('$\Delta\dot\theta(t)$', 'interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
@@ -248,7 +299,7 @@ figure(i);i=i+1;
 subplot(2,1,1);
 plot(t_arr, d2r_E0_E0, 'linewidth', 2);
 box on; grid on;
-ylim([-6 6]);
+ylim([-3 3]);
 xlim([0 t_plot]);
 ylabel('Acceleration $E_0~[\frac{m}{s^2}]$', 'interpreter', 'latex', 'fontsize', 16);
 xlabel('Time $[s]$', 'Interpreter','latex','FontSize',16);
@@ -257,13 +308,13 @@ legend('$\ddot{r}_{E_0}^{E_0}(t)\cdot {\bf i}_x^{E_0}$', '$\ddot{\bf r}_{E_0}^{E
 subplot(2,1,2);
 plot(t_arr, d2r_E1_E0, 'linewidth', 2);
 box on; grid on;
-ylim([-6 6]);
+ylim([-3 3]);
 xlim([0 t_plot]);
 ylabel('Acceleration $E_1~[\frac{m}{s^2}]$', 'interpreter', 'latex', 'fontsize', 16);
 xlabel('Time $[s]$', 'Interpreter','latex','FontSize',16);
 legend('$\ddot{\bf r}_{E_1}^{E_0}(t)\cdot {\bf i}_x^{E_0}$','$\ddot{\bf r}_{E_1}^{E_0}(t)\cdot {\bf i}_y^{E_0}$', 'interpreter', 'latex', 'fontsize', 16, 'location', 'northwest', 'orientation', 'horizontal');
 
-% Plot residual
+% Find indices corresponding to when the sub is slipping
 counter=1;
 sub_array_cell = {};
 start_ind = 1;
@@ -278,12 +329,13 @@ for element=2:length(true_flag_ind)
 end
 % Extract last sub-array
 sub_array_cell{counter} = true_flag_ind(start_ind:end);
-%
+
+% Plot residual
 figure(i);i=i+1;
 hold on
 for cell=sub_array_cell
     cell_arr = cell{:};
-    rectangle(Position=[t_arr(cell_arr(1)),-1,t_arr(cell_arr(end))-t_arr(cell_arr(1)),3.5], FaceColor=[0.5 0 0 0.1], EdgeColor=[0.5 0 0 0.2]);
+    rectangle(Position=[t_arr(cell_arr(1)),-1,t_arr(cell_arr(end))-t_arr(cell_arr(1)),6], FaceColor=[0.5 0 0 0.1], EdgeColor=[0.5 0 0 0.2]);
 end
 plot(t_arr, residual, 'linewidth', 2);
 plot(t_arr, 0.25*ones(size(t_arr)), '--', 'linewidth', 2, 'color', 'black');
@@ -293,3 +345,4 @@ ylabel('Residual signal $[\frac{m}{s^2}]$', 'Interpreter','latex','FontSize',16)
 xlabel('Time $[s]$', 'Interpreter','latex','FontSize',16);
 legend('$\varrho(t)$', 'Threshold', 'interpreter', 'latex', 'fontsize', 16, 'location', 'northwest');
 xlim([0 t_plot]);
+ylim([-1 2]);
